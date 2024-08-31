@@ -396,8 +396,17 @@ async def start_next_round(client, chat_id, word_length, time_limit):
     await client.send_message(chat_id, f"@{player}, your letter is '{letter}'. You have {time_limit} seconds to write a word with at least {word_length} letters.")
     
     def check_reply(client, message, message_to_check):
-    # Your logic here, for example:
     return message_to_check.text.startswith(starting_letter) and len(message_to_check.text) >= min_word_length
+try:
+        response = await client.listen(chat_id, timeout=time_limit, filters=filters.text & filters.create(check_reply))
+        last_letter = response.text[-1].lower()
+        await client.send_message(chat_id, f"Good job! The next word must start with '{last_letter}'.")
+        
+        if len(word_game_players) > 1:
+            await start_next_round(client, chat_id, word_length + 1, time_limit - 1)
+        else:
+            await client.send_message(chat_id, "Game over! No more players left.")
+            ongoing_word_game = None
 
 
     try:
