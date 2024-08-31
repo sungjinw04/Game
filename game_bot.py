@@ -5,7 +5,11 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQ
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import asyncio
-from english_words import english_words_lower_alpha_set
+import nltk
+from nltk.corpus import words
+
+nltk.download('words')
+english_words_lower_alpha_set = set(words.words())
 
 
 # Load environment variables from .env file
@@ -39,15 +43,7 @@ word_game_players = []
 ongoing_word_game = None
 
 
-def check_reply(msg):
-    return (
-        msg.from_user.id == player and
-        msg.chat.id == chat_id and
-        msg.text and
-        len(msg.text) >= word_length and
-        msg.text.lower().startswith(letter) and
-        msg.text.lower() in english_words_lower_alpha_set
-    )
+
 
 # Lists of random truth questions and dare tasks
 truth_questions = [
