@@ -355,19 +355,46 @@ async def chess_move(client, callback_query: CallbackQuery):
 
     await callback_query.answer()
 
-# Command: /truth - Ask a random truth question
-@app.on_message(filters.command("truth") & filters.group)
-async def ask_truth(client, message):
-    question = random.choice(truth_questions)
-    msg = await message.reply_text(f"Truth: {question}")
+# Command: /godrandi - Start Truth or Dare game
+@app.on_message(filters.command("godrandi") & filters.group)
+async def start_godrandi(client, message):
+    # Create keyboard with 'Truth' and 'Dare' buttons
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Truth", callback_data=f"godrandi_truth_{message.from_user.id}"),
+                InlineKeyboardButton("Dare", callback_data=f"godrandi_dare_{message.from_user.id}")
+            ]
+        ]
+    )
+    # Send a message with the keyboard
+    msg = await message.reply_text("Choose your fate: Truth or Dare?", reply_markup=keyboard)
+    # Store the message for future reference
     truth_dare_messages[message.chat.id] = msg
 
-# Command: /dare - Give a random dare task
-@app.on_message(filters.command("dare") & filters.group)
-async def give_dare(client, message):
-    task = random.choice(dare_tasks)
-    msg = await message.reply_text(f"Dare: {task}")
-    truth_dare_messages[message.chat.id] = msg
+# Callback for Truth or Dare button click
+@app.on_callback_query(filters.regex(r"^godrandi_"))
+async def godrandi_callback(client, callback_query: CallbackQuery):
+    data = callback_query.data.split("_")
+    choice = data[1]  # 'truth' or 'dare'
+    user_id = int(data[2])
+
+    if callback_query.from_user.id != user_id:
+        await callback_query.answer("This choice is not for you!", show_alert=True)
+        return
+
+    if choice == "truth":
+        question = random.choice(truth_questions)
+        await callback_query.message.reply_text(f"Truth: {question}")
+    elif choice == "dare":
+        task = random.choice(dare_tasks)
+        await callback_query.message.reply_text(f"Dare: {task}")
+
+    # Delete the previous message with the Truth/Dare buttons
+    await callback_query.message.delete()
+    await callback_query.answer()
+
+
 
 if __name__ == "__main__":
     print("Bot started...")
