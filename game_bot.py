@@ -395,15 +395,10 @@ async def start_next_round(client, chat_id, word_length, time_limit):
     
     await client.send_message(chat_id, f"@{player}, your letter is '{letter}'. You have {time_limit} seconds to write a word with at least {word_length} letters.")
     
-    def check_reply(msg):
-        return (
-            msg.from_user.id == player and
-            msg.chat.id == chat_id and
-            msg.text and
-            len(msg.text) >= word_length and
-            msg.text.lower().startswith(letter) and
-            msg.text.lower() in english_words_lower_alpha_set  # Ensure word is valid
-        )
+    def check_reply(client, message, message_to_check):
+    # Your logic here, for example:
+    return message_to_check.text.startswith(starting_letter) and len(message_to_check.text) >= min_word_length
+
 
     try:
         combined_filter = filters.text & filters.create(check_reply)
@@ -423,10 +418,7 @@ async def start_next_round(client, chat_id, word_length, time_limit):
                 await client.send_message(chat_id, "Game over! Congratulations to all participants!")
                 ongoing_word_game = False
 
-    except asyncio.TimeoutError:
-        await client.send_message(chat_id, "Time's up! You failed to respond in time.")
-        word_game_players.remove(player)
-        if word_game_players:
+    
             # Proceed to the next round without increasing word length or decreasing time
             await start_next_round(client, chat_id, word_length, time_limit)
         else:
