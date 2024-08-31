@@ -185,24 +185,75 @@ async def start_ttt_game(client, message):
         "opponent": opponent
     }
 
-    # Show the initial board and prompt the first move
-    await show_ttt_board(client, message.chat.id, challenger, opponent)
+    # Show the game board
+    await show_ttt_board(client, message.chat.id, board, challenger, opponent)
 
-# Helper function to display the Tic Tac Toe board
-async def show_ttt_board(client, chat_id, challenger, opponent):
-    game = ongoing_ttt_games[(challenger, opponent)]
-    board = game["board"]
-
-    board_display = (
-        f"{board[0]} | {board[1]} | {board[2]}\n"
-        f"---------\n"
-        f"{board[3]} | {board[4]} | {board[5]}\n"
-        f"---------\n"
-        f"{board[6]} | {board[7]} | {board[8]}"
+async def show_ttt_board(client, chat_id, board, challenger, opponent):
+    # Display Tic Tac Toe board with inline buttons
+    keyboard = InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton(board[i] if board[i] != " " else str(i + 1), callback_data=f"ttt_move_{i}_{challenger}_{opponent}")
+            for i in range(j, j + 3)
+        ] for j in range(0, 9, 3)]
     )
+    if chat_id in game_messages:
+        await game_messages[chat_id].edit_text("Tic Tac Toe Game! Use the buttons below to make a move.", reply_markup=keyboard)
+    else:
+        msg = await client.send_message(chat_id, "Tic Tac Toe Game! Use the buttons below to make a move.", reply_markup=keyboard)
+        game_messages[chat_id] = msg
 
-    turn_user = challenger if game["turn"] == challenger else opponent
-    await client.send_message(chat_id, f"Tic Tac Toe Game:\n\n{board_display}\n\nIt's @{turn_user}'s turn!")
+# Callback for Tic Tac Toe moves
+@app.on_callback_query(filters.regex(r"^ttt_move_"))
+async def ttt_move(client, callback_query: CallbackQuery):
+    data = callback_query.data.split("_")
+    move_index = int(data[2])
+    challenger = int(data[3])
+    opponent = int(data[4])
+    
+    game = ongoing_ttt_games.get((challenger, opponent))
+    if not game:
+        await callback_query.answer("This game is no longer available.", show_alert=True)
+        return
+
+    user_id = callback_query.from_user.id
+    if user_id != game["turn"]:
+        await callback_query.answer("It's not your turn!", show_alert=True)
+        return
+
+    # Make the move
+    if game["board"][move_index] == " ":
+        game["board"][move_index] = "X" if user_id == game["challenger"] else "O"
+        game["turn"] = game["opponent"] if user_id == game["challenger"] else game["challenger"]
+
+        # Check for win or draw
+        if check_ttt_winner(game["board"]):
+            winner = "challenger" if user_id == game["challenger"] else "opponent"
+            winner_id = game[winner]
+            username = callback_query.from_user.username
+            update_user_score(winner_id, username, 30)
+            await callback_query.message.edit_text(f"Player {callback_query.from_user.mention} wins! +30 points!")
+            del ongoing_ttt_games[(challenger, opponent)]
+        elif " " not in game["board"]:
+            update_user_score(challenger, callback_query.from_user.username, 7)
+            update_user_score(opponent, callback_query.from_user.username, 7)
+            await callback_query.message.edit_text("It's a draw! Both players get 7 points.")
+            del ongoing_ttt_games[(challenger, opponent)]
+        else:
+            # Update board if game continues
+            await show_ttt_board(client, callback_query.message.chat.id, game["board"], challenger, opponent)
+        await callback_query.answer()
+    else:
+        await callback_query.answer("Invalid move!", show_alert=True)
+
+def check_ttt_winner(board):
+    # Define all possible winning combinations
+    win_combinations = [(0, 1, 2), (3, 4, 5), (6, 7, 8), 
+                        (0, 3, 6), (1, 4, 7), (2, 5, 8), 
+                        (0, 4, 8), (2, 4, 6)]
+    for a, b, c in win_combinations:
+        if board[a] == board[b] == board[c] and board[a] != " ":
+            return True
+    return False
 
 # Command: /rajapelerani - Start Chess Game
 @app.on_message(filters.command("rajapelerani") & filters.group & filters.reply)
@@ -227,9 +278,11 @@ async def start_chess_game(client, message):
 # Callback for accepting or declining chess game
 @app.on_callback_query(filters.regex(r"^(accept|decline)_chess_\d+_\d+$"))
 async def chess_game_response(client, callback_query: CallbackQuery):
-    action, challenger_id, opponent_id = callback_query.data.split("_")
-    challenger_id = int(challenger_id)
-    opponent_id = int(opponent_id)
+    # Correctly split the callback data and handle any unexpected formats
+    parts = callback_query.data.split("_")
+    action = parts[0]
+    challenger_id = int(parts[2])
+    opponent_id = int(parts[3])
 
     if action == "decline":
         await callback_query.message.edit_text("The chess challenge was declined.")
@@ -256,6 +309,7 @@ async def chess_game_response(client, callback_query: CallbackQuery):
 
         await callback_query.message.edit_text(f"Chess game started!\n\nWhite: @{white}\nBlack: @{black}\n\n@{white}, it's your turn to move.")
         await callback_query.answer()
+        
 
 # Helper function to initialize chess board
 def initialize_chess_board():
