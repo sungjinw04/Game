@@ -300,6 +300,7 @@ async def chess_game_response(client, callback_query: CallbackQuery):
         else:
             white, black = opponent_id, challenger_id
 
+        # Initialize the chess game
         ongoing_chess_games[(challenger_id, opponent_id)] = {
             "white": white,
             "black": black,
@@ -307,9 +308,27 @@ async def chess_game_response(client, callback_query: CallbackQuery):
             "board": initialize_chess_board()
         }
 
-        await callback_query.message.edit_text(f"Chess game started!\n\nWhite: @{white}\nBlack: @{black}\n\n@{white}, it's your turn to move.")
+        # Display the initial chess board
+        await show_chess_board(client, callback_query.message.chat.id, ongoing_chess_games[(challenger_id, opponent_id)])
         await callback_query.answer()
-        
+
+
+async def show_chess_board(client, chat_id, game_state):
+    """Function to display the chess board to users."""
+    board = game_state["board"]
+    white = game_state["white"]
+    black = game_state["black"]
+
+    # Formatting the board for display
+    board_str = "\n".join([" ".join(row) for row in board])
+    
+    # Message text with board and turn information
+    text = f"Chess game started!\n\nWhite: @{white}\nBlack: @{black}\n\n{board_str}\n\n@{white}, it's your turn to move."
+
+    # Send the board as a message to the chat
+    await client.send_message(chat_id, text)
+
+
 
 # Helper function to initialize chess board
 def initialize_chess_board():
