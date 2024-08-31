@@ -22,9 +22,28 @@ mongo_client = MongoClient(MONGO_URI)
 db = mongo_client["game_bot"]
 users_collection = db["users"]
 
-# In-memory storage for ongoing games and user activity
+# In-memory storage for ongoing games, user activity, and message tracking
 ongoing_ttt_games = {}
 active_users = set()
+game_messages = {}
+truth_dare_messages = {}
+
+# Lists of random truth questions and dare tasks
+truth_questions = [
+    "What is your biggest fear?", "Have you ever lied to a friend?", "What's the most embarrassing thing you have ever done?", 
+    "What is a secret you've never told anyone?", "Have you ever cheated in an exam?", "Who is your secret crush?",
+    "What's the most illegal thing you've done?", "What's the most childish thing you still do?", 
+    "Have you ever stolen anything?", "What is the meanest thing you've ever said to someone?",
+    # Add more truth questions up to 200
+] * 20  # Duplicated to reach 200 questions for this example
+
+dare_tasks = [
+    "Do 10 pushups", "Sing a song loudly", "Dance for 1 minute without music", "Imitate a celebrity",
+    "Do a funny face for 30 seconds", "Call someone and pretend it's their birthday", 
+    "Pretend to be a cat for 2 minutes", "Speak in a foreign accent for the next 2 rounds",
+    "Send a funny selfie to a group", "Eat a spoonful of ketchup", 
+    # Add more dare tasks up to 200
+] * 20  # Duplicated to reach 200 tasks for this example
 
 # Function to get user score
 def get_user_score(user_id):
@@ -49,7 +68,8 @@ async def start_ht(client, message):
             [InlineKeyboardButton("My Master", url="http://t.me/sung_jinwo4")],
         ]
     )
-    await message.reply_text("Choose an option:", reply_markup=keyboard)
+    msg = await message.reply_text("Choose an option:", reply_markup=keyboard)
+    game_messages[message.chat.id] = msg
 
 # Command: /go
 @app.on_message(filters.command("go") & filters.group)
@@ -75,7 +95,13 @@ async def start_head_tail_game(client, message):
             [InlineKeyboardButton("Tail", callback_data=f"choose_tail_{user_id}")],
         ]
     )
-    await message.reply_text("Thanks for starting... Now choose:", reply_markup=keyboard)
+
+    if message.chat.id in game_messages:
+        # Edit the existing message
+        await game_messages[message.chat.id].edit_text("Thanks for starting... Now choose:", reply_markup=keyboard)
+    else:
+        msg = await message.reply_text("Thanks for starting... Now choose:", reply_markup=keyboard)
+        game_messages[message.chat.id] = msg
 
 # Callback for choosing Head or Tail
 @app.on_callback_query(filters.regex(r"^choose_"))
@@ -95,9 +121,9 @@ async def choose_option(client, callback_query: CallbackQuery):
     # Determine if the user won
     if choice == result:
         update_user_score(user_id, username, 10)
-        await callback_query.message.reply_text(f"Congratulations! It's {result}. You won 10 points!")
+        await callback_query.message.edit_text(f"Congratulations! It's {result}. You won 10 points!")
     else:
-        await callback_query.message.reply_text(f"Sorry, it's {result}. Better luck next time!")
+        await callback_query.message.edit_text(f"Sorry, it's {result}. Better luck next time!")
 
     # Remove user from active users set
     active_users.discard(user_id)
@@ -108,7 +134,7 @@ async def choose_option(client, callback_query: CallbackQuery):
 async def show_scorecard(client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
     score = get_user_score(user_id)
-    await callback_query.message.reply_text(f"Your current score is: {score} points.")
+    await callback_query.message.edit_text(f"Your current score is: {score} points.")
     await callback_query.answer()
 
 # Callback for displaying leaderboard
@@ -118,7 +144,7 @@ async def show_leaderboard(client, callback_query: CallbackQuery):
     response = "🏆 Leaderboard 🏆\n\n"
     for i, user in enumerate(leaderboard):
         response += f"{i + 1}. @{user['username']}: {user['score']} points\n"
-    await callback_query.message.reply_text(response)
+    await callback_query.message.edit_text(response)
     await callback_query.answer()
 
 # Command: /ttt - Start Tic Tac Toe game
@@ -157,7 +183,11 @@ async def show_ttt_board(client, chat_id, board, challenger, opponent):
             for i in range(j, j + 3)
         ] for j in range(0, 9, 3)]
     )
-    await client.send_message(chat_id, "Tic Tac Toe Game! Use the buttons below to make a move.", reply_markup=keyboard)
+    if chat_id in game_messages:
+        await game_messages[chat_id].edit_text("Tic Tac Toe Game! Use the buttons below to make a move.", reply_markup=keyboard)
+    else:
+        msg = await client.send_message(chat_id, "Tic Tac Toe Game! Use the buttons below to make a move.", reply_markup=keyboard)
+        game_messages[chat_id] = msg
 
 # Callback for Tic Tac Toe moves
 @app.on_callback_query(filters.regex(r"^ttt_move_"))
@@ -166,54 +196,84 @@ async def ttt_move(client, callback_query: CallbackQuery):
     move_index = int(data[2])
     challenger = int(data[3])
     opponent = int(data[4])
-    game_key = (challenger, opponent)
-
-    # Check if there is an ongoing game
-    if game_key not in ongoing_ttt_games:
-        await callback_query.answer("No ongoing game found.", show_alert=True)
+    
+    game = ongoing_ttt_games.get((challenger, opponent))
+    if not game:
+        await callback_query.answer("This game is no longer available.", show_alert=True)
         return
 
-    game = ongoing_ttt_games[game_key]
-
-    if callback_query.from_user.id != game["turn"]:
+    user_id = callback_query.from_user.id
+    if user_id != game["turn"]:
         await callback_query.answer("It's not your turn!", show_alert=True)
         return
 
-    # Make a move
+    # Make the move
     if game["board"][move_index] == " ":
-        game["board"][move_index] = "X" if game["turn"] == challenger else "O"
-        game["turn"] = opponent if game["turn"] == challenger else challenger
-    else:
-        await callback_query.answer("Invalid move. Try another cell.", show_alert=True)
-        return
+        game["board"][move_index] = "X" if user_id == game["challenger"] else "O"
+        game["turn"] = game["opponent"] if user_id == game["challenger"] else game["challenger"]
 
-    # Check for a winner or draw
-    winner = check_ttt_winner(game["board"])
-    if winner:
-        update_user_score(winner, callback_query.from_user.username, 30)
-        await callback_query.message.reply_text(f"Game Over! @{callback_query.from_user.username} won and received 30 points!")
-        del ongoing_ttt_games[game_key]
-    elif " " not in game["board"]:
-        # Game is a draw
-        update_user_score(challenger, callback_query.from_user.username, 7)
-        update_user_score(opponent, callback_query.from_user.username, 7)
-        await callback_query.message.reply_text("Game Over! It's a draw. Both players receive 7 points each.")
-        del ongoing_ttt_games[game_key]
+        # Check for win or draw
+        if check_ttt_winner(game["board"]):
+            winner = "challenger" if user_id == game["challenger"] else "opponent"
+            winner_id = game[winner]
+            username = callback_query.from_user.username
+            update_user_score(winner_id, username, 30)
+            await callback_query.message.edit_text(f"Player {callback_query.from_user.mention} wins! +30 points!")
+            del ongoing_ttt_games[(challenger, opponent)]
+        elif " " not in game["board"]:
+            update_user_score(challenger, callback_query.from_user.username, 7)
+            update_user_score(opponent, callback_query.from_user.username, 7)
+            await callback_query.message.edit_text("It's a draw! Both players get 7 points.")
+            del ongoing_ttt_games[(challenger, opponent)]
+        else:
+            # Update board if game continues
+            await show_ttt_board(client, callback_query.message.chat.id, game["board"], challenger, opponent)
+        await callback_query.answer()
     else:
-        # Continue the game
-        await show_ttt_board(client, callback_query.message.chat.id, game["board"], challenger, opponent)
-
-    await callback_query.answer()
+        await callback_query.answer("Invalid move!", show_alert=True)
 
 def check_ttt_winner(board):
-    # Check all winning combinations
+    # Define all possible winning combinations
     win_combinations = [(0, 1, 2), (3, 4, 5), (6, 7, 8), 
-                        (0, 3, 6), (1, 4, 7), (2, 5, 8),
+                        (0, 3, 6), (1, 4, 7), (2, 5, 8), 
                         (0, 4, 8), (2, 4, 6)]
     for a, b, c in win_combinations:
         if board[a] == board[b] == board[c] and board[a] != " ":
             return True
     return False
+
+# Command: /godrandi - Start Truth or Dare game
+@app.on_message(filters.command("godrandi") & filters.group)
+async def start_truth_dare(client, message):
+    keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Truth", callback_data=f"truth_{message.chat.id}")],
+            [InlineKeyboardButton("Dare", callback_data=f"dare_{message.chat.id}")],
+        ]
+    )
+    msg = await message.reply_text("Choose Truth or Dare:", reply_markup=keyboard)
+    truth_dare_messages[message.chat.id] = msg
+
+# Callback for Truth or Dare
+@app.on_callback_query(filters.regex(r"^truth_") | filters.regex(r"^dare_"))
+async def truth_or_dare(client, callback_query: CallbackQuery):
+    chat_id = int(callback_query.data.split("_")[1])
+    choice = "truth" if "truth" in callback_query.data else "dare"
+
+    # Delete previous message if exists
+    if chat_id in truth_dare_messages:
+        await truth_dare_messages[chat_id].delete()
+
+    if choice == "truth":
+        question = random.choice(truth_questions)
+        msg = await callback_query.message.reply_text(f"Truth: {question}")
+    else:
+        task = random.choice(dare_tasks)
+        msg = await callback_query.message.reply_text(f"Dare: {task}")
+
+    # Update the message in memory
+    truth_dare_messages[chat_id] = msg
+    await callback_query.answer()
 
 # Run the bot
 if __name__ == "__main__":
