@@ -4,6 +4,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pymongo import MongoClient
 from dotenv import load_dotenv
+import asyncio
 
 # Load environment variables from .env file
 load_dotenv()
@@ -32,6 +33,8 @@ active_users = set()
 game_messages = {}
 truth_dare_messages = {}
 ongoing_chess_games = {}
+word_game_players = []
+ongoing_word_game = None
 
 # Lists of random truth questions and dare tasks
 truth_questions = [
@@ -204,55 +207,70 @@ async def show_ttt_board(client, chat_id, board, challenger, opponent):
 
 # Callback for Tic Tac Toe moves
 @app.on_callback_query(filters.regex(r"^ttt_move_"))
-async def ttt_move(client, callback_query: CallbackQuery):
+async def handle_ttt_move(client, callback_query: CallbackQuery):
     data = callback_query.data.split("_")
-    move_position = int(data[2])
+    move = int(data[2])
     challenger = int(data[3])
     opponent = int(data[4])
 
-    if (challenger, opponent) not in ongoing_ttt_games:
-        await callback_query.answer("Game not found!", show_alert=True)
+    game = ongoing_ttt_games.get((challenger, opponent))
+
+    if not game:
+        await callback_query.answer("This game is no longer active.", show_alert=True)
         return
 
-    game = ongoing_ttt_games[(challenger, opponent)]
-    board = game["board"]
-    current_turn = game["turn"]
+    user_id = callback_query.from_user.id
 
-    if callback_query.from_user.id != current_turn:
+    if user_id != game["turn"]:
         await callback_query.answer("It's not your turn!", show_alert=True)
         return
 
-    if board[move_position] != " ":
-        await callback_query.answer("This position is already taken!", show_alert=True)
+    board = game["board"]
+
+    if board[move] != " ":
+        await callback_query.answer("Invalid move!", show_alert=True)
         return
 
-    # Update board
-    board[move_position] = "X" if current_turn == challenger else "O"
+    # Update the board with the player's move
+    board[move] = "X" if user_id == challenger else "O"
 
-    # Check for win or draw
-    if check_win(board):
-        winner = callback_query.from_user.id
-        update_user_score(winner, callback_query.from_user.username, 15)
-        await callback_query.message.edit_text(f"Congratulations! {callback_query.from_user.mention} has won the game!")
+    # Check for a winner or a draw
+    winner = check_winner(board)
+    if winner:
+        winner_name = "Challenger" if winner == "X" else "Opponent"
+        await callback_query.message.edit_text(f"Game over! {winner_name} wins!")
         del ongoing_ttt_games[(challenger, opponent)]
-    elif " " not in board:
+        return
+
+    if " " not in board:
         await callback_query.message.edit_text("It's a draw!")
         del ongoing_ttt_games[(challenger, opponent)]
-    else:
-        # Switch turns
-        game["turn"] = opponent if current_turn == challenger else challenger
-        await show_ttt_board(client, callback_query.message.chat.id, board, challenger, opponent)
+        return
+
+    # Switch turns
+    game["turn"] = opponent if user_id == challenger else challenger
+
+    # Update the game board
+    await show_ttt_board(client, callback_query.message.chat.id, board, challenger, opponent)
 
     await callback_query.answer()
 
-def check_win(board):
-    win_conditions = [(0, 1, 2), (3, 4, 5), (6, 7, 8), (0, 3, 6), (1, 4, 7), (2, 5, 8), (0, 4, 8), (2, 4, 6)]
-    for condition in win_conditions:
-        if board[condition[0]] == board[condition[1]] == board[condition[2]] != " ":
-            return True
-    return False
+# Function to check for a winner in Tic Tac Toe
+def check_winner(board):
+    # Define the winning combinations
+    winning_combinations = [
+        (0, 1, 2), (3, 4, 5), (6, 7, 8),  # Rows
+        (0, 3, 6), (1, 4, 7), (2, 5, 8),  # Columns
+        (0, 4, 8), (2, 4, 6)  # Diagonals
+    ]
 
-# Command: /chess - Start a Chess game
+    for combo in winning_combinations:
+        if board[combo[0]] == board[combo[1]] == board[combo[2]] != " ":
+            return board[combo[0]]  # Return the winning symbol ('X' or 'O')
+
+    return None
+
+# Command: /chess - Start a chess game
 @app.on_message(filters.command("chess") & filters.group & filters.reply)
 async def start_chess_game(client, message):
     challenger = message.from_user.id
@@ -263,140 +281,138 @@ async def start_chess_game(client, message):
         return
 
     if (challenger, opponent) in ongoing_chess_games:
-        await message.reply_text("A game is already ongoing between these members.")
+        await message.reply_text("A chess game is already ongoing between these members.")
         return
 
-    # Initialize the Chess game state
-    board = [
-        ["r", "n", "b", "q", "k", "b", "n", "r"],
-        ["p", "p", "p", "p", "p", "p", "p", "p"],
-        [" ", " ", " ", " ", " ", " ", " ", " "],
-        [" ", " ", " ", " ", " ", " ", " ", " "],
-        [" ", " ", " ", " ", " ", " ", " ", " "],
-        [" ", " ", " ", " ", " ", " ", " ", " "],
-        ["P", "P", "P", "P", "P", "P", "P", "P"],
-        ["R", "N", "B", "Q", "K", "B", "N", "R"]
-    ]
+    # Initialize the chess game state (using a simple dictionary for demo)
+    chess_board = [" " for _ in range(64)]  # Simplified 8x8 board for demo
     current_turn = challenger
 
     ongoing_chess_games[(challenger, opponent)] = {
-        "board": board,
+        "board": chess_board,
         "turn": current_turn,
         "challenger": challenger,
         "opponent": opponent
     }
 
-    # Show the Chess board
-    await show_chess_board(client, message.chat.id, board, challenger, opponent)
+    await message.reply_text("Chess game started! (This is a simplified demo version.)")
 
-async def show_chess_board(client, chat_id, board, challenger, opponent):
-    pieces = {
-        "r": "♜", "n": "♞", "b": "♝", "q": "♛", "k": "♚", "p": "♟",
-        "R": "♖", "N": "♘", "B": "♗", "Q": "♕", "K": "♔", "P": "♙",
-        " ": "⬜"
-    }
+# Command: /stopchess - Stop an ongoing chess game
+@app.on_message(filters.command("stopchess") & filters.group)
+async def stop_chess_game(client, message):
+    user_id = message.from_user.id
+    found_game = None
 
-    # Create the chess board with inline buttons
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(pieces[board[i][j]], callback_data=f"chess_move_{i}_{j}_{challenger}_{opponent}")
-                for j in range(8)
-            ]
-            for i in range(8)
-        ]
-    )
+    for game in ongoing_chess_games.keys():
+        if user_id in game:
+            found_game = game
+            break
 
-    if chat_id in game_messages:
-        await game_messages[chat_id].edit_text("Chess Game! Use the buttons below to make a move.", reply_markup=keyboard)
+    if found_game:
+        del ongoing_chess_games[found_game]
+        await message.reply_text("The chess game has been stopped.")
     else:
-        msg = await client.send_message(chat_id, "Chess Game! Use the buttons below to make a move.", reply_markup=keyboard)
-        game_messages[chat_id] = msg
+        await message.reply_text("You are not in an ongoing chess game.")
 
-# Callback for Chess moves
-@app.on_callback_query(filters.regex(r"^chess_move_"))
-async def chess_move(client, callback_query: CallbackQuery):
-    data = callback_query.data.split("_")
-    row, col = int(data[2]), int(data[3])
-    challenger = int(data[4])
-    opponent = int(data[5])
+# English word game implementation
+@app.on_message(filters.command("russianpelo") & filters.group)
+async def start_word_game(client, message):
+    global word_game_players, ongoing_word_game
 
-    if (challenger, opponent) not in ongoing_chess_games:
-        await callback_query.answer("Game not found!", show_alert=True)
+    if ongoing_word_game:
+        await message.reply_text("A word game is already ongoing!")
         return
 
-    game = ongoing_chess_games[(challenger, opponent)]
-    board = game["board"]
-    current_turn = game["turn"]
+    word_game_players = []
+    ongoing_word_game = True
+    await message.reply_text("A new word game has started! Type /joinchudai to join. You have 1 minute to join.")
 
-    if callback_query.from_user.id != current_turn:
-        await callback_query.answer("It's not your turn!", show_alert=True)
+    await asyncio.sleep(60)  # Wait for players to join
+
+    if not word_game_players:
+        ongoing_word_game = False
+        await message.reply_text("No players joined the game. Game cancelled.")
         return
 
-    # Implement chess move logic (move validation, checkmate, etc.)
+    await message.reply_text("The game is starting now!")
 
-    # For simplicity, let's just update the piece to a dummy move
-    # Update board (this is just a placeholder, real chess logic needed)
-    board[row][col] = " "
+    await start_next_round(client, message.chat.id, 3, 20)
 
-    # Check for checkmate or draw (not implemented here)
-    # if check_checkmate(board):
-    #     winner = callback_query.from_user.id
-    #     update_user_score(winner, callback_query.from_user.username, 30)
-    #     await callback_query.message.edit_text(f"Congratulations! {callback_query.from_user.mention} has won the chess game!")
-    #     del ongoing_chess_games[(challenger, opponent)]
-    # elif check_draw(board):
-    #     await callback_query.message.edit_text("It's a draw!")
-    #     del ongoing_chess_games[(challenger, opponent)]
-    # else:
-    #     # Switch turns
-    game["turn"] = opponent if current_turn == challenger else challenger
-    await show_chess_board(client, callback_query.message.chat.id, board, challenger, opponent)
+@app.on_message(filters.command("joinchudai") & filters.group)
+async def join_word_game(client, message):
+    global word_game_players
 
-    await callback_query.answer()
-
-# Command: /godrandi - Start Truth or Dare game
-@app.on_message(filters.command("godrandi") & filters.group)
-async def start_godrandi(client, message):
-    # Create keyboard with 'Truth' and 'Dare' buttons
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("Truth", callback_data=f"godrandi_truth_{message.from_user.id}"),
-                InlineKeyboardButton("Dare", callback_data=f"godrandi_dare_{message.from_user.id}")
-            ]
-        ]
-    )
-    # Send a message with the keyboard
-    msg = await message.reply_text("Choose your fate: Truth or Dare?", reply_markup=keyboard)
-    # Store the message for future reference
-    truth_dare_messages[message.chat.id] = msg
-
-# Callback for Truth or Dare button click
-@app.on_callback_query(filters.regex(r"^godrandi_"))
-async def godrandi_callback(client, callback_query: CallbackQuery):
-    data = callback_query.data.split("_")
-    choice = data[1]  # 'truth' or 'dare'
-    user_id = int(data[2])
-
-    if callback_query.from_user.id != user_id:
-        await callback_query.answer("This choice is not for you!", show_alert=True)
+    if not ongoing_word_game:
+        await message.reply_text("There is no active game to join.")
         return
 
-    if choice == "truth":
-        question = random.choice(truth_questions)
-        await callback_query.message.reply_text(f"Truth: {question}")
-    elif choice == "dare":
-        task = random.choice(dare_tasks)
-        await callback_query.message.reply_text(f"Dare: {task}")
+    if message.from_user.id in word_game_players:
+        await message.reply_text("You have already joined the game!")
+        return
 
-    # Delete the previous message with the Truth/Dare buttons
-    await callback_query.message.delete()
-    await callback_query.answer()
+    word_game_players.append(message.from_user.id)
+    await message.reply_text(f"{message.from_user.username} has joined the game!")
 
+@app.on_message(filters.command("gangbang") & filters.group)
+async def force_start_game(client, message):
+    global ongoing_word_game
+
+    if not word_game_players:
+        await message.reply_text("No players have joined. Cannot start the game.")
+        return
+
+    ongoing_word_game = True
+    await message.reply_text("The game is starting now!")
+    await start_next_round(client, message.chat.id, 3, 20)
+
+async def start_next_round(client, chat_id, word_length, time_limit):
+    global word_game_players
+
+    player = random.choice(word_game_players)
+    letter = random.choice("abcdefghijklmnopqrstuvwxyz")
+    
+    await client.send_message(chat_id, f"@{player}, your letter is '{letter}'. You have {time_limit} seconds to write a word with at least {word_length} letters.")
+    
+    def check_reply(msg):
+        return msg.from_user.id == player and msg.chat.id == chat_id and len(msg.text) >= word_length and msg.text.lower().startswith(letter)
+
+    try:
+        response = await client.listen(chat_id, timeout=time_limit, filters=filters.text & filters.create(check_reply))
+        last_letter = response.text[-1].lower()
+        await client.send_message(chat_id, f"Good job! The next word must start with '{last_letter}'.")
+        
+        if len(word_game_players) > 1:
+            await start_next_round(client, chat_id, word_length + 1, time_limit - 1)
+        else:
+            await client.send_message(chat_id, "Game over! No more players left.")
+            ongoing_word_game = None
+
+    except asyncio.TimeoutError:
+        await client.send_message(chat_id, "Time's up! You failed to respond in time.")
+        word_game_players.remove(player)
+        if word_game_players:
+            await start_next_round(client, chat_id, word_length, time_limit)
+        else:
+            await client.send_message(chat_id, "Game over! No more players left.")
+            ongoing_word_game = None
+
+# Command: /help - Show all available commands
+@app.on_message(filters.command("help") & filters.group)
+async def show_help(client, message):
+    help_text = """
+    Available commands:
+    /startht - Start the Head or Tail game
+    /go - Play a round of Head or Tail
+    /ttt - Start a Tic Tac Toe game
+    /chess - Start a simplified chess game
+    /stopchess - Stop an ongoing chess game
+    /russianpelo - Start a new English word game
+    /joinchudai - Join the ongoing English word game
+    /gangbang - Force start the word game (admin only)
+    """
+    await message.reply_text(help_text)
 
 
 if __name__ == "__main__":
     print("Bot started...")
     app.run()
-
