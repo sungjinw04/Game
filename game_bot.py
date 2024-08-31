@@ -448,7 +448,8 @@ async def show_help(client, message):
 - `/gangbang` - Force start the word game (admins only)
 - `/help` - Show this help message
 """
-    await message.reply_text(help_text, parse_mode="markdown")
+    await message.reply_text(help_text, parse_mode="md")
+
 
 
 
