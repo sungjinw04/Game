@@ -396,7 +396,7 @@ async def start_next_round(client, chat_id, word_length, time_limit):
     await client.send_message(chat_id, f"@{player}, your letter is '{letter}'. You have {time_limit} seconds to write a word with at least {word_length} letters.")
     
     def check_reply(client, message, message_to_check):
-    return message_to_check.text.startswith(starting_letter) and len(message_to_check.text) >= min_word_length
+     message_to_check.text.startswith(starting_letter) and len(message_to_check.text) >= min_word_length
 try:
         response = await client.listen(chat_id, timeout=time_limit, filters=filters.text & filters.create(check_reply))
         last_letter = response.text[-1].lower()
