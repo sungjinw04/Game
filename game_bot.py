@@ -5,6 +5,8 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQ
 from pymongo import MongoClient
 from dotenv import load_dotenv
 import asyncio
+from english_words import english_words_lower_alpha_set
+
 
 # Load environment variables from .env file
 load_dotenv()
@@ -35,6 +37,17 @@ truth_dare_messages = {}
 ongoing_chess_games = {}
 word_game_players = []
 ongoing_word_game = None
+
+
+def check_reply(msg):
+    return (
+        msg.from_user.id == player and
+        msg.chat.id == chat_id and
+        msg.text and
+        len(msg.text) >= word_length and
+        msg.text.lower().startswith(letter) and
+        msg.text.lower() in english_words_lower_alpha_set
+    )
 
 # Lists of random truth questions and dare tasks
 truth_questions = [
@@ -335,7 +348,6 @@ async def start_word_game(client, message):
         return
 
     await message.reply_text("The game is starting now!")
-
     await start_next_round(client, message.chat.id, 3, 20)
 
 @app.on_message(filters.command("joinchudai") & filters.group)
@@ -351,14 +363,28 @@ async def join_word_game(client, message):
         return
 
     word_game_players.append(message.from_user.id)
-    await message.reply_text(f"{message.from_user.username} has joined the game!")
+    await message.reply_text(f"{message.from_user.mention} has joined the game!")
 
 @app.on_message(filters.command("gangbang") & filters.group)
 async def force_start_game(client, message):
     global ongoing_word_game
 
+    # Check if the user is an admin
+    try:
+        chat_member = await client.get_chat_member(message.chat.id, message.from_user.id)
+        if chat_member.status not in ["administrator", "creator"]:
+            await message.reply_text("Only admins can force start the game.")
+            return
+    except Exception as e:
+        await message.reply_text("An error occurred while verifying admin status.")
+        return
+
     if not word_game_players:
         await message.reply_text("No players have joined. Cannot start the game.")
+        return
+
+    if ongoing_word_game:
+        await message.reply_text("A word game is already ongoing!")
         return
 
     ongoing_word_game = True
@@ -366,7 +392,7 @@ async def force_start_game(client, message):
     await start_next_round(client, message.chat.id, 3, 20)
 
 async def start_next_round(client, chat_id, word_length, time_limit):
-    global word_game_players
+    global word_game_players, ongoing_word_game
 
     player = random.choice(word_game_players)
     letter = random.choice("abcdefghijklmnopqrstuvwxyz")
@@ -374,43 +400,60 @@ async def start_next_round(client, chat_id, word_length, time_limit):
     await client.send_message(chat_id, f"@{player}, your letter is '{letter}'. You have {time_limit} seconds to write a word with at least {word_length} letters.")
     
     def check_reply(msg):
-        return msg.from_user.id == player and msg.chat.id == chat_id and len(msg.text) >= word_length and msg.text.lower().startswith(letter)
+        return (
+            msg.from_user.id == player and
+            msg.chat.id == chat_id and
+            msg.text and
+            len(msg.text) >= word_length and
+            msg.text.lower().startswith(letter) and
+            msg.text.lower() in english_words_lower_alpha_set  # Ensure word is valid
+        )
 
     try:
-        response = await client.listen(chat_id, timeout=time_limit, filters=filters.text & filters.create(check_reply))
-        last_letter = response.text[-1].lower()
-        await client.send_message(chat_id, f"Good job! The next word must start with '{last_letter}'.")
+        combined_filter = filters.text & filters.create(check_reply)
+        response = await client.listen(filters=combined_filter, timeout=time_limit)
         
-        if len(word_game_players) > 1:
-            await start_next_round(client, chat_id, word_length + 1, time_limit - 1)
-        else:
-            await client.send_message(chat_id, "Game over! No more players left.")
-            ongoing_word_game = None
+        if response:
+            last_letter = response.text[-1].lower()
+            await client.send_message(chat_id, f"Good job! The next word must start with '{last_letter}'.")
+            
+            # Update the letter for the next player
+            letter = last_letter
+
+            # Proceed to the next round with updated word length and time limit
+            if len(word_game_players) > 1 and time_limit > 1:
+                await start_next_round(client, chat_id, word_length + 1, time_limit - 1)
+            else:
+                await client.send_message(chat_id, "Game over! Congratulations to all participants!")
+                ongoing_word_game = False
 
     except asyncio.TimeoutError:
         await client.send_message(chat_id, "Time's up! You failed to respond in time.")
         word_game_players.remove(player)
         if word_game_players:
+            # Proceed to the next round without increasing word length or decreasing time
             await start_next_round(client, chat_id, word_length, time_limit)
         else:
             await client.send_message(chat_id, "Game over! No more players left.")
-            ongoing_word_game = None
+            ongoing_word_game = False
 
 # Command: /help - Show all available commands
 @app.on_message(filters.command("help") & filters.group)
 async def show_help(client, message):
     help_text = """
-    Available commands:
-    /startht - Start the Head or Tail game
-    /go - Play a round of Head or Tail
-    /ttt - Start a Tic Tac Toe game
-    /chess - Start a simplified chess game
-    /stopchess - Stop an ongoing chess game
-    /russianpelo - Start a new English word game
-    /joinchudai - Join the ongoing English word game
-    /gangbang - Force start the word game (admin only)
-    """
-    await message.reply_text(help_text)
+**Available Commands:**
+- `/startht` - Start the Head or Tail game
+- `/go` - Play a round of Head or Tail
+- `/ttt` - Start a Tic Tac Toe game
+- `/chess` - Start a simplified chess game
+- `/stopchess` - Stop an ongoing chess game
+- `/russianpelo` - Start a new English word game
+- `/joinchudai` - Join the ongoing English word game
+- `/gangbang` - Force start the word game (admins only)
+- `/help` - Show this help message
+"""
+    await message.reply_text(help_text, parse_mode="markdown")
+
 
 
 if __name__ == "__main__":
