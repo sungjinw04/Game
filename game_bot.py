@@ -14,6 +14,10 @@ API_HASH = "cda9f1b3f9da4c0c93d1f5c23ccb19e2"
 BOT_TOKEN = "7329929698:AAGD5Ccwm0qExCq9_6GVHDp2E7iidLH-McU"
 MONGO_URI = "mongodb+srv://tanjiro1564:tanjiro1564@cluster0.pp5yz4e.mongodb.net/?retryWrites=true&w=majority"
 
+# Owner credentials
+OWNER_ID = 1886390680  # Replace with the actual owner ID
+OWNER_USERNAME = "sung_jinwo4"  # Replace with the actual owner username
+
 # Initialize the Pyrogram Client
 app = Client("game_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
@@ -27,6 +31,7 @@ ongoing_ttt_games = {}
 active_users = set()
 game_messages = {}
 truth_dare_messages = {}
+ongoing_chess_games = {}
 
 # Lists of random truth questions and dare tasks
 truth_questions = [
@@ -54,9 +59,17 @@ def get_user_score(user_id):
 def update_user_score(user_id, username, points):
     users_collection.update_one({"user_id": user_id}, {"$set": {"username": username}, "$inc": {"score": points}}, upsert=True)
 
+# Function to reset user score
+def reset_user_score(user_id):
+    users_collection.update_one({"user_id": user_id}, {"$set": {"score": 0}})
+
 # Function to get leaderboard
 def get_leaderboard():
     return list(users_collection.find().sort("score", -1).limit(10))
+
+# Function to get leaderboard for a specific chat
+def get_group_leaderboard(chat_id):
+    return list(users_collection.find({"chat_id": chat_id}).sort("score", -1).limit(10))
 
 # Command: /startht
 @app.on_message(filters.command("startht") & filters.group)
@@ -172,111 +185,114 @@ async def start_ttt_game(client, message):
         "opponent": opponent
     }
 
-    # Show the game board
-    await show_ttt_board(client, message.chat.id, board, challenger, opponent)
+    # Show the initial board and prompt the first move
+    await show_ttt_board(client, message.chat.id, challenger, opponent)
 
-async def show_ttt_board(client, chat_id, board, challenger, opponent):
-    # Display Tic Tac Toe board with inline buttons
-    keyboard = InlineKeyboardMarkup(
-        [[
-            InlineKeyboardButton(board[i] if board[i] != " " else str(i + 1), callback_data=f"ttt_move_{i}_{challenger}_{opponent}")
-            for i in range(j, j + 3)
-        ] for j in range(0, 9, 3)]
+# Helper function to display the Tic Tac Toe board
+async def show_ttt_board(client, chat_id, challenger, opponent):
+    game = ongoing_ttt_games[(challenger, opponent)]
+    board = game["board"]
+
+    board_display = (
+        f"{board[0]} | {board[1]} | {board[2]}\n"
+        f"---------\n"
+        f"{board[3]} | {board[4]} | {board[5]}\n"
+        f"---------\n"
+        f"{board[6]} | {board[7]} | {board[8]}"
     )
-    if chat_id in game_messages:
-        await game_messages[chat_id].edit_text("Tic Tac Toe Game! Use the buttons below to make a move.", reply_markup=keyboard)
-    else:
-        msg = await client.send_message(chat_id, "Tic Tac Toe Game! Use the buttons below to make a move.", reply_markup=keyboard)
-        game_messages[chat_id] = msg
 
-# Callback for Tic Tac Toe moves
-@app.on_callback_query(filters.regex(r"^ttt_move_"))
-async def ttt_move(client, callback_query: CallbackQuery):
-    data = callback_query.data.split("_")
-    move_index = int(data[2])
-    challenger = int(data[3])
-    opponent = int(data[4])
-    
-    game = ongoing_ttt_games.get((challenger, opponent))
-    if not game:
-        await callback_query.answer("This game is no longer available.", show_alert=True)
+    turn_user = challenger if game["turn"] == challenger else opponent
+    await client.send_message(chat_id, f"Tic Tac Toe Game:\n\n{board_display}\n\nIt's @{turn_user}'s turn!")
+
+# Command: /rajapelerani - Start Chess Game
+@app.on_message(filters.command("rajapelerani") & filters.group & filters.reply)
+async def start_chess_game(client, message):
+    challenger = message.from_user
+    opponent = message.reply_to_message.from_user
+
+    if challenger.id == opponent.id:
+        await message.reply_text("You cannot play with yourself. Challenge another member!")
         return
 
-    user_id = callback_query.from_user.id
-    if user_id != game["turn"]:
-        await callback_query.answer("It's not your turn!", show_alert=True)
+    if (challenger.id, opponent.id) in ongoing_chess_games or (opponent.id, challenger.id) in ongoing_chess_games:
+        await message.reply_text("A game is already ongoing between these members.")
         return
 
-    # Make the move
-    if game["board"][move_index] == " ":
-        game["board"][move_index] = "X" if user_id == game["challenger"] else "O"
-        game["turn"] = game["opponent"] if user_id == game["challenger"] else game["challenger"]
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Accept", callback_data=f"accept_chess_{challenger.id}_{opponent.id}"),
+          InlineKeyboardButton("Decline", callback_data=f"decline_chess_{challenger.id}_{opponent.id}")]]
+    )
+    await message.reply_text(f"{opponent.mention}, {challenger.mention} has challenged you to a game of chess!", reply_markup=keyboard)
 
-        # Check for win or draw
-        if check_ttt_winner(game["board"]):
-            winner = "challenger" if user_id == game["challenger"] else "opponent"
-            winner_id = game[winner]
-            username = callback_query.from_user.username
-            update_user_score(winner_id, username, 30)
-            await callback_query.message.edit_text(f"Player {callback_query.from_user.mention} wins! +30 points!")
-            del ongoing_ttt_games[(challenger, opponent)]
-        elif " " not in game["board"]:
-            update_user_score(challenger, callback_query.from_user.username, 7)
-            update_user_score(opponent, callback_query.from_user.username, 7)
-            await callback_query.message.edit_text("It's a draw! Both players get 7 points.")
-            del ongoing_ttt_games[(challenger, opponent)]
-        else:
-            # Update board if game continues
-            await show_ttt_board(client, callback_query.message.chat.id, game["board"], challenger, opponent)
+# Callback for accepting or declining chess game
+@app.on_callback_query(filters.regex(r"^(accept|decline)_chess_\d+_\d+$"))
+async def chess_game_response(client, callback_query: CallbackQuery):
+    action, challenger_id, opponent_id = callback_query.data.split("_")
+    challenger_id = int(challenger_id)
+    opponent_id = int(opponent_id)
+
+    if action == "decline":
+        await callback_query.message.edit_text("The chess challenge was declined.")
         await callback_query.answer()
-    else:
-        await callback_query.answer("Invalid move!", show_alert=True)
+        return
 
-def check_ttt_winner(board):
-    # Define all possible winning combinations
-    win_combinations = [(0, 1, 2), (3, 4, 5), (6, 7, 8), 
-                        (0, 3, 6), (1, 4, 7), (2, 5, 8), 
-                        (0, 4, 8), (2, 4, 6)]
-    for a, b, c in win_combinations:
-        if board[a] == board[b] == board[c] and board[a] != " ":
-            return True
-    return False
+    if callback_query.from_user.id != opponent_id:
+        await callback_query.answer("This challenge isn't for you!", show_alert=True)
+        return
 
-# Command: /godrandi - Start Truth or Dare game
-@app.on_message(filters.command("godrandi") & filters.group)
-async def start_truth_dare(client, message):
-    keyboard = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("Truth", callback_data=f"truth_{message.chat.id}")],
-            [InlineKeyboardButton("Dare", callback_data=f"dare_{message.chat.id}")],
-        ]
-    )
-    msg = await message.reply_text("Choose Truth or Dare:", reply_markup=keyboard)
-    truth_dare_messages[message.chat.id] = msg
+    if action == "accept":
+        # Randomly assign colors
+        if random.choice([True, False]):
+            white, black = challenger_id, opponent_id
+        else:
+            white, black = opponent_id, challenger_id
 
-# Callback for Truth or Dare
-@app.on_callback_query(filters.regex(r"^truth_") | filters.regex(r"^dare_"))
-async def truth_or_dare(client, callback_query: CallbackQuery):
-    chat_id = int(callback_query.data.split("_")[1])
-    choice = "truth" if "truth" in callback_query.data else "dare"
+        ongoing_chess_games[(challenger_id, opponent_id)] = {
+            "white": white,
+            "black": black,
+            "turn": white,
+            "board": initialize_chess_board()
+        }
 
-    # Delete previous message if exists
-    if chat_id in truth_dare_messages:
-        await truth_dare_messages[chat_id].delete()
+        await callback_query.message.edit_text(f"Chess game started!\n\nWhite: @{white}\nBlack: @{black}\n\n@{white}, it's your turn to move.")
+        await callback_query.answer()
 
-    if choice == "truth":
-        question = random.choice(truth_questions)
-        msg = await callback_query.message.reply_text(f"Truth: {question}")
-    else:
-        task = random.choice(dare_tasks)
-        msg = await callback_query.message.reply_text(f"Dare: {task}")
+# Helper function to initialize chess board
+def initialize_chess_board():
+    # Simplified representation, adjust as needed
+    board = [
+        ["r", "n", "b", "q", "k", "b", "n", "r"],
+        ["p", "p", "p", "p", "p", "p", "p", "p"],
+        [" ", " ", " ", " ", " ", " ", " ", " "],
+        [" ", " ", " ", " ", " ", " ", " ", " "],
+        [" ", " ", " ", " ", " ", " ", " ", " "],
+        [" ", " ", " ", " ", " ", " ", " ", " "],
+        ["P", "P", "P", "P", "P", "P", "P", "P"],
+        ["R", "N", "B", "Q", "K", "B", "N", "R"]
+    ]
+    return board
 
-    # Update the message in memory
-    truth_dare_messages[chat_id] = msg
-    await callback_query.answer()
+# Command: /chuplawde - Reset user score
+@app.on_message(filters.command("chuplawde") & filters.user(OWNER_ID))
+async def reset_score(client, message):
+    if not message.reply_to_message:
+        await message.reply_text("Reply to the user whose score you want to reset.")
+        return
+
+    target_user_id = message.reply_to_message.from_user.id
+    reset_user_score(target_user_id)
+    await message.reply_text("User's score has been reset to 0.")
+
+# Command: /ldbd - Show local leaderboard
+@app.on_message(filters.command("ldbd") & filters.group)
+async def show_group_leaderboard(client, message):
+    chat_id = message.chat.id
+    leaderboard = get_group_leaderboard(chat_id)
+    response = "🏆 Group Leaderboard 🏆\n\n"
+    for i, user in enumerate(leaderboard):
+        response += f"{i + 1}. @{user['username']}: {user['score']} points\n"
+    await message.reply_text(response)
 
 # Run the bot
-if __name__ == "__main__":
-    print("Bot is starting...")
-    app.run()
+app.run()
 
